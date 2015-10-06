@@ -153,7 +153,14 @@ func (self *hawkularSink) groupName(p *sink_api.Point) string {
 }
 
 func (self *hawkularSink) idName(p *sink_api.Point) string {
-	n := []string{p.Labels[sink_api.LabelContainerName.Key], p.Labels[sink_api.LabelPodId.Key], p.Name}
+	n := make([]string, 0, 3)
+	if p.Labels[sink_api.LabelPodId.Key] != "" {
+		n = append(n, p.Labels[sink_api.LabelContainerName.Key], p.Labels[sink_api.LabelPodId.Key], p.Name)
+	} else {
+		n = append(n, p.Labels[sink_api.LabelContainerName.Key], p.Labels[sink_api.LabelHostID.Key], p.Name)
+	}
+
+	// n := []string{p.Labels[sink_api.LabelContainerName.Key], p.Labels[sink_api.LabelPodId.Key], p.Name}
 	return strings.Join(n, separator)
 }
 

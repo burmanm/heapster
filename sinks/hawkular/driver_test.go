@@ -79,6 +79,7 @@ func TestMetricTransform(t *testing.T) {
 	l := make(map[string]string)
 	l["spooky"] = "notvisible"
 	l[sink_api.LabelHostname.Key] = "localhost"
+	l[sink_api.LabelHostID.Key] = "localhost"
 	l[sink_api.LabelContainerName.Key] = "docker"
 	l[sink_api.LabelPodId.Key] = "aaaa-bbbb-cccc-dddd"
 
@@ -103,6 +104,14 @@ func TestMetricTransform(t *testing.T) {
 	assert.Equal(t, 1, len(m.Data))
 	_, ok := m.Data[0].Value.(float64)
 	assert.True(t, ok, "Value should have been converted to float64")
+
+	delete(l, sink_api.LabelPodId.Key)
+
+	m, err = hSink.pointToMetricHeader(&ts)
+	assert.NoError(t, err)
+
+	assert.Equal(t, fmt.Sprintf("%s/%s/%s", p.Labels[sink_api.LabelContainerName.Key], p.Labels[sink_api.LabelHostID.Key], p.Name), m.Id)
+
 }
 
 func TestRecentTest(t *testing.T) {

@@ -13,19 +13,21 @@ func Serialize(opts []*UnitOption) io.Reader {
 		return &buf
 	}
 
-	idx := map[string][]*UnitOption{}
+	curSection := opts[0].Section
+
+	writeSectionHeader(&buf, curSection)
+	writeNewline(&buf)
+
 	for _, opt := range opts {
-		idx[opt.Section] = append(idx[opt.Section], opt)
-	}
+		if opt.Section != curSection {
+			curSection = opt.Section
 
-	for curSection, curOpts := range idx {
-		writeSectionHeader(&buf, curSection)
-		writeNewline(&buf)
-
-		for _, opt := range curOpts {
-			writeOption(&buf, opt)
+			writeNewline(&buf)
+			writeSectionHeader(&buf, curSection)
 			writeNewline(&buf)
 		}
+
+		writeOption(&buf, opt)
 		writeNewline(&buf)
 	}
 

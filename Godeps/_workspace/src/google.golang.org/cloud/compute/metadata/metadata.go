@@ -46,19 +46,50 @@ var (
 )
 
 var metaClient = &http.Client{
-	Transport: &internal.UATransport{
+	Transport: &internal.Transport{
 		Base: &http.Transport{
-			Dial: (&net.Dialer{
-				Timeout:   750 * time.Millisecond,
-				KeepAlive: 30 * time.Second,
-			}).Dial,
+			Dial: dialer().Dial,
 			ResponseHeaderTimeout: 750 * time.Millisecond,
 		},
 	},
 }
 
+// go13Dialer is nil until we're using Go 1.3+.
+// This is a workaround for https://github.com/golang/oauth2/issues/70, where
+// net.Dialer.KeepAlive is unavailable on Go 1.2 (which App Engine as of
+// Jan 2015 still runs).
+//
+// TODO(bradfitz,jbd,adg,dsymonds): remove this once App Engine supports Go
+// 1.3+ and go-app-builder also supports 1.3+, or when Go 1.2 is no longer an
+// option on App Engine.
+var go13Dialer func() *net.Dialer
+
+func dialer() *net.Dialer {
+	if fn := go13Dialer; fn != nil {
+		return fn()
+	}
+	return &net.Dialer{
+		Timeout: 750 * time.Millisecond,
+	}
+}
+
+// NotDefinedError is returned when requested metadata is not defined.
+//
+// The underlying string is the suffix after "/computeMetadata/v1/".
+//
+// This error is not returned if the value is defined to be the empty
+// string.
+type NotDefinedError string
+
+func (suffix NotDefinedError) Error() string {
+	return fmt.Sprintf("metadata: GCE metadata %q not defined", string(suffix))
+}
+
 // Get returns a value from the metadata service.
 // The suffix is appended to "http://metadata/computeMetadata/v1/".
+//
+// If the requested metadata is not defined, the returned error will
+// be of type NotDefinedError.
 func Get(suffix string) (string, error) {
 	// Using 169.254.169.254 instead of "metadata" here because Go
 	// binaries built with the "netgo" tag and without cgo won't
@@ -73,6 +104,9 @@ func Get(suffix string) (string, error) {
 		return "", err
 	}
 	defer res.Body.Close()
+	if res.StatusCode == http.StatusNotFound {
+		return "", NotDefinedError(suffix)
+	}
 	if res.StatusCode != 200 {
 		return "", fmt.Errorf("status code %d trying to fetch %s", res.StatusCode, url)
 	}
@@ -200,12 +234,24 @@ func lines(suffix string) ([]string, error) {
 
 // InstanceAttributeValue returns the value of the provided VM
 // instance attribute.
+//
+// If the requested attribute is not defined, the returned error will
+// be of type NotDefinedError.
+//
+// InstanceAttributeValue may return ("", nil) if the attribute was
+// defined to be the empty string.
 func InstanceAttributeValue(attr string) (string, error) {
 	return Get("instance/attributes/" + attr)
 }
 
 // ProjectAttributeValue returns the value of the provided
 // project attribute.
+//
+// If the requested attribute is not defined, the returned error will
+// be of type NotDefinedError.
+//
+// ProjectAttributeValue may return ("", nil) if the attribute was
+// defined to be the empty string.
 func ProjectAttributeValue(attr string) (string, error) {
 	return Get("project/attributes/" + attr)
 }

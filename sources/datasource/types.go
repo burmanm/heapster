@@ -47,8 +47,11 @@ type Kubelet interface {
 	GetAllRawContainers(host Host, start, end time.Time) ([]api.Container, error)
 }
 
-func NewKubelet(kubeletConfig *kube_client.KubeletConfig) (Kubelet, error) {
+func NewKubelet(kubeletConfig *kube_client.KubeletConfig, bearerToken string) (Kubelet, error) {
 	transport, err := kube_client.MakeTransport(kubeletConfig)
+	if bearerToken != "" {
+		transport = kube_client.NewBearerAuthRoundTripper(bearerToken, transport)
+	}
 	if err != nil {
 		return nil, err
 	}

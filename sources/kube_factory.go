@@ -174,7 +174,7 @@ func CreateKubeSources(uri *url.URL, c cache.Cache) ([]api.Source, error) {
 		TLSClientConfig: kubeConfig.TLSClientConfig,
 	}
 
-	kubeletApi, err := datasource.NewKubelet(kubeletConfig)
+	kubeletApi, err := datasource.NewKubelet(kubeletConfig, kubeConfig.BearerToken)
 	if err != nil {
 		return nil, err
 	}

@@ -16,15 +16,20 @@ package datasource
 
 import (
 	"encoding/json"
-	"net/http/httptest"
-	"testing"
-	"time"
-
-	cadvisor_api "github.com/google/cadvisor/info/v1"
+	"fmt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"k8s.io/heapster/sources/api"
 	"k8s.io/kubernetes/pkg/util"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	cadvisor_api "github.com/google/cadvisor/info/v1"
+	kube_client "k8s.io/kubernetes/pkg/client/unversioned"
 )
 
 func checkContainer(t *testing.T, expected api.Container, actual api.Container) {
@@ -166,4 +171,35 @@ func TestAllContainers(t *testing.T) {
 	require.Len(t, containers, 2)
 	checkContainer(t, rootContainer, containers[0])
 	checkContainer(t, subcontainer, containers[1])
+}
+
+func TestBasicKubeletToken(t *testing.T) {
+	response := cadvisor_api.ContainerInfo{}
+	data, err := json.Marshal(&response)
+	require.NoError(t, err)
+
+	token := "015d22e11dac1048b8cb755264bbb4d7"
+
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, fmt.Sprintf("Bearer %s", token), r.Header.Get("Authorization"))
+		fmt.Fprintf(w, string(data))
+	}))
+	defer s.Close()
+
+	kubeletConfig := &kube_client.KubeletConfig{}
+
+	str := strings.Split(s.URL, ":")
+	p, err := strconv.Atoi(str[2])
+
+	require.NoError(t, err)
+	h := Host{
+		IP:   str[1][2:],
+		Port: p,
+	}
+
+	kubelet, err := NewKubelet(kubeletConfig, token)
+	require.NoError(t, err)
+	_, err = kubelet.GetContainer(h, time.Now(), time.Now().Add(time.Minute))
+
+	require.NoError(t, err)
 }

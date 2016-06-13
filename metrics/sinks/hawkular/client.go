@@ -149,10 +149,12 @@ func (h *hawkularSink) nodeName(ms *core.MetricSet) string {
 }
 
 func (h *hawkularSink) registerLabeledIfNecessary(ms *core.MetricSet, metric core.LabeledMetric, m ...metrics.Modifier) error {
-	key := h.idName(ms, metric.Name)
+	var key string
 
 	if resourceID, found := metric.Labels[core.LabelResourceID.Key]; found {
 		key = h.idName(ms, metric.Name+separator+resourceID)
+	} else {
+		key = h.idName(ms, metric.Name)
 	}
 
 	h.regLock.Lock()
@@ -250,11 +252,14 @@ func (h *hawkularSink) sendData(tmhs map[string][]metrics.MetricHeader, wg *sync
 // Converts Timeseries to metric structure used by the Hawkular
 func (h *hawkularSink) pointToLabeledMetricHeader(ms *core.MetricSet, metric core.LabeledMetric, timestamp time.Time) (*metrics.MetricHeader, error) {
 
-	name := h.idName(ms, metric.Name)
+	var name string
 	if resourceID, found := metric.Labels[core.LabelResourceID.Key]; found {
 		name = h.idName(ms, metric.Name+separator+resourceID)
+	} else {
+		name = h.idName(ms, metric.Name)
 	}
 
+	// TODO This is unnecessary, Counter type uses Integer
 	var value float64
 	if metric.ValueType == core.ValueInt64 {
 		value = float64(metric.IntValue)

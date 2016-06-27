@@ -157,6 +157,7 @@ func (h *hawkularSink) registerLabeledIfNecessary(ms *core.MetricSet, metric cor
 		key = h.idName(ms, metric.Name)
 	}
 
+	// TODO There's no concurrency here as the Mutex blocks the whole process. Fix and use a channel?
 	h.regLock.Lock()
 	defer h.regLock.Unlock()
 

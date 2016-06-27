@@ -671,3 +671,5 @@ func TestBatchingTimeseries(t *testing.T) {
 		newIds[v] = true
 	}
 }
+
+// HistoricalSource tests

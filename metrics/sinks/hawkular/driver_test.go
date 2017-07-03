@@ -381,7 +381,7 @@ func TestStoreTimeseries(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 
 		typ := r.RequestURI[strings.Index(r.RequestURI, "hawkular/metrics/")+17:]
-		typ = typ[:len(typ)-5]
+		typ = typ[:len(typ)-4]
 
 		switch typ {
 		case "counters":
@@ -594,7 +594,7 @@ func TestFiltering(t *testing.T) {
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		m.Lock()
 		defer m.Unlock()
-		if strings.Contains(r.RequestURI, "data") {
+		if strings.Contains(r.RequestURI, "raw") {
 			defer r.Body.Close()
 			b, err := ioutil.ReadAll(r.Body)
 			assert.NoError(t, err)

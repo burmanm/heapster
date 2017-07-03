@@ -94,12 +94,14 @@ func (h *hawkularSink) ExportData(db *core.DataBatch) {
 
 		for _, ms := range db.MetricSets {
 
-			// // Transform ms.MetricValues to LabeledMetrics first
-			lms := metricValueToLabeledMetric(ms.MetricValues)
-			ms.LabeledMetrics = append(ms.LabeledMetrics, lms...)
+			mvlms := metricValueToLabeledMetric(ms.MetricValues)
+			lms := make([]core.LabeledMetric, 0, len(mvlms)+len(ms.LabeledMetrics))
+
+			lms = append(lms, mvlms...)
+			lms = append(lms, ms.LabeledMetrics...)
 
 		Store:
-			for _, labeledMetric := range ms.LabeledMetrics {
+			for _, labeledMetric := range lms {
 
 				for _, filter := range h.filters {
 					if !filter(ms, labeledMetric.Name) {

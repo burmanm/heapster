@@ -34,7 +34,7 @@ import (
 
 func dummySink() *hawkularSink {
 	return &hawkularSink{
-		reg:    make(map[string]*metrics.MetricDefinition),
+		reg:    make(map[string]uint64),
 		models: make(map[string]*metrics.MetricDefinition),
 	}
 }
@@ -295,40 +295,53 @@ func integSink(uri string) (*hawkularSink, error) {
 // Test that the tags for metric is updated..
 func TestRegister(t *testing.T) {
 	m := &sync.Mutex{}
-	definitionsCalled := make(map[string]bool)
+	// definitionsCalled := make(map[string]bool)
 	updateTagsCalled := false
+	requests := 0
 
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		m.Lock()
 		defer m.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 
-		if strings.Contains(r.RequestURI, "metrics?type=") {
-			typ := r.RequestURI[strings.Index(r.RequestURI, "type=")+5:]
-			definitionsCalled[typ] = true
-			if typ == "gauge" {
-				fmt.Fprintln(w, `[{ "id": "test.create.gauge.1", "tenantId": "test-heapster", "type": "gauge", "tags": { "descriptor_name": "test/metric/1" } }]`)
-			} else {
+		if strings.Contains(r.RequestURI, "tenants") {
+			fmt.Fprintln(w, `[{ "id": "test-heapster"},{"id": "fgahj-fgas-basf-gegsg" }]`)
+		} else {
+			tenant := r.Header.Get("Hawkular-Tenant")
+			if tenant != "test-heapster" {
+				requests++
 				w.WriteHeader(http.StatusNoContent)
+				return
 			}
-		} else if strings.Contains(r.RequestURI, "/tags") && r.Method == "PUT" {
-			updateTagsCalled = true
-			// assert.True(t, strings.Contains(r.RequestURI, "k1:d1"), "Tag k1 was not updated with value d1")
-			defer r.Body.Close()
-			b, err := ioutil.ReadAll(r.Body)
-			assert.NoError(t, err)
+			if strings.Contains(r.RequestURI, "metrics?tags=descriptor_name%3A%2A") {
+				requests++
+				// typ := r.RequestURI[strings.Index(r.RequestURI, "type=")+5:]
+				// definitionsCalled[typ] = true
+				// if typ == "gauge" {
+				fmt.Fprintln(w, `[{ "id": "test.create.gauge.1", "tenantId": "test-heapster", "type": "gauge", "tags": { "descriptor_name": "test/metric/1" } }]`)
+				// } else {
+				// 	fmt.Printf("Empty\n")
+				// 	w.WriteHeader(http.StatusNoContent)
+				// }
+			} else if strings.Contains(r.RequestURI, "/tags") && r.Method == "PUT" {
+				updateTagsCalled = true
+				// assert.True(t, strings.Contains(r.RequestURI, "k1:d1"), "Tag k1 was not updated with value d1")
+				defer r.Body.Close()
+				b, err := ioutil.ReadAll(r.Body)
+				assert.NoError(t, err)
 
-			tags := make(map[string]string)
-			err = json.Unmarshal(b, &tags)
-			assert.NoError(t, err)
+				tags := make(map[string]string)
+				err = json.Unmarshal(b, &tags)
+				assert.NoError(t, err)
 
-			_, kt1 := tags["k1_description"]
-			_, dt := tags["descriptor_name"]
+				_, kt1 := tags["k1_description"]
+				_, dt := tags["descriptor_name"]
 
-			assert.True(t, kt1, "k1_description tag is missing")
-			assert.True(t, dt, "descriptor_name is missing")
+				assert.True(t, kt1, "k1_description tag is missing")
+				assert.True(t, dt, "descriptor_name is missing")
 
-			w.WriteHeader(http.StatusOK)
+				w.WriteHeader(http.StatusOK)
+			}
 		}
 	}))
 	defer s.Close()
@@ -364,12 +377,13 @@ func TestRegister(t *testing.T) {
 	assert.Equal(t, 2, len(hSink.models))
 	assert.Equal(t, 1, len(hSink.reg))
 
-	assert.True(t, definitionsCalled["gauge"], "Gauge definitions were not fetched")
-	assert.True(t, definitionsCalled["counter"], "Counter definitions were not fetched")
+	// assert.True(t, definitionsCalled["gauge"], "Gauge definitions were not fetched")
+	// assert.True(t, definitionsCalled["counter"], "Counter definitions were not fetched")
 	assert.True(t, updateTagsCalled, "Updating outdated tags was not called")
+	assert.Equal(t, 2, requests)
 
 	// Try without pre caching
-	definitionsCalled = make(map[string]bool)
+	// definitionsCalled = make(map[string]bool)
 	updateTagsCalled = false
 
 	hSink, err = integSink(s.URL + "?tenant=test-heapster&disablePreCache=true")
@@ -381,8 +395,8 @@ func TestRegister(t *testing.T) {
 	assert.Equal(t, 2, len(hSink.models))
 	assert.Equal(t, 0, len(hSink.reg))
 
-	assert.False(t, definitionsCalled["gauge"], "Gauge definitions were fetched")
-	assert.False(t, definitionsCalled["counter"], "Counter definitions were fetched")
+	// assert.False(t, definitionsCalled["gauge"], "Gauge definitions were fetched")
+	// assert.False(t, definitionsCalled["counter"], "Counter definitions were fetched")
 	assert.False(t, updateTagsCalled, "Updating outdated tags was called")
 }
 
@@ -545,19 +559,7 @@ func TestTags(t *testing.T) {
 
 	assert.Equal(t, 1, tagsUpdated)
 
-	tags := hSink.reg["test-container/test-podid/test/metric/A/XYZ"].Tags
-	assert.Equal(t, 10, len(tags))
-	assert.Equal(t, "test-label", tags["projectId"])
-	assert.Equal(t, "test-container", tags[core.LabelContainerName.Key])
-	assert.Equal(t, "test-podid", tags[core.LabelPodId.Key])
-	assert.Equal(t, "test-container/test/metric/A", tags["group_id"])
-	assert.Equal(t, "test/metric/A", tags["descriptor_name"])
-	assert.Equal(t, "XYZ", tags[core.LabelResourceID.Key])
-	assert.Equal(t, "bytes", tags["units"])
-
-	assert.Equal(t, "testLabelA:testValueA,testLabelB:testValueB", tags[core.LabelLabels.Key])
-	assert.Equal(t, "testValueA", tags["labels.testLabelA"])
-	assert.Equal(t, "testValueB", tags["labels.testLabelB"])
+	assert.True(t, hSink.reg["test-container/test-podid/test/metric/A/XYZ"] > 0)
 
 	assert.Equal(t, 10, len(serverTags))
 	assert.Equal(t, "test-label", serverTags["projectId"])

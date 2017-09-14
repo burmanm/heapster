@@ -23,6 +23,7 @@ import (
 	"net/url"
 	"strconv"
 	"sync"
+	"sync/atomic"
 
 	"github.com/golang/glog"
 	"github.com/hawkular/hawkular-client-go/metrics"
@@ -60,12 +61,9 @@ func (h *hawkularSink) Register(mds []core.MetricDescriptor) error {
 
 	if !h.disablePreCaching {
 		// Fetch currently known metrics from Hawkular-Metrics and cache them
-		types := []metrics.MetricType{metrics.Gauge, metrics.Counter}
-		for _, t := range types {
-			err := h.updateDefinitions(t)
-			if err != nil {
-				return err
-			}
+		err := h.cacheDefinitions()
+		if err != nil {
+			return err
 		}
 	}
 
@@ -93,6 +91,7 @@ func (h *hawkularSink) ExportData(db *core.DataBatch) {
 		}
 
 		wg := &sync.WaitGroup{}
+		updatedTags := uint64(0)
 
 		for _, ms := range db.MetricSets {
 
@@ -123,7 +122,8 @@ func (h *hawkularSink) ExportData(db *core.DataBatch) {
 				wg.Add(1)
 				go func(ms *core.MetricSet, labeledMetric core.LabeledMetric, tenant string) {
 					defer wg.Done()
-					h.registerLabeledIfNecessary(ms, labeledMetric, metrics.Tenant(tenant))
+					c, _ := h.registerLabeledIfNecessary(ms, labeledMetric, metrics.Tenant(tenant))
+					atomic.AddUint64(&updatedTags, c)
 				}(ms, labeledMetric, tenant)
 
 				mH, err := h.pointToLabeledMetricHeader(ms, labeledMetric, db.Timestamp)
@@ -142,6 +142,7 @@ func (h *hawkularSink) ExportData(db *core.DataBatch) {
 		}
 		h.sendData(tmhs, wg) // Send to a limited channel? Only batches.. egg.
 		wg.Wait()
+		glog.V(4).Infof("ExportData updated %d tags, total size of cached tags is %d\n", updatedTags, len(h.reg))
 	}
 }
 
@@ -198,7 +199,7 @@ func NewHawkularSink(u *url.URL) (core.DataSink, error) {
 }
 
 func (h *hawkularSink) init() error {
-	h.reg = make(map[string]*metrics.MetricDefinition)
+	h.reg = make(map[string]uint64)
 	h.models = make(map[string]*metrics.MetricDefinition)
 	h.modifiers = make([]metrics.Modifier, 0)
 	h.filters = make([]Filter, 0)

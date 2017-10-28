@@ -15,12 +15,10 @@
 package hawkular
 
 import (
-	"bytes"
 	"fmt"
 	"hash/fnv"
 	"math"
 	"regexp"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -94,35 +92,22 @@ func (h *hawkularSink) updateDefinitions(m ...metrics.Modifier) error {
 func hash(md *metrics.MetricDefinition) uint64 {
 	h := fnv.New64a()
 
-	// Hash metricId first
-	// h.Write([]byte(tenant))
 	h.Write([]byte(md.Type))
 	h.Write([]byte(md.ID))
 
-	// Then tags to allow "recent" checking
-	var buffer bytes.Buffer
+	helper := fnv.New64a()
 
-	tagNames := make([]string, 0, len(md.Tags))
-	tagValues := make([]string, 0, len(md.Tags))
+	var hashCode uint64
 
 	for k, v := range md.Tags {
-		tagNames = append(tagNames, k)
-		tagValues = append(tagValues, v)
+		helper.Reset()
+		helper.Write([]byte(k))
+		helper.Write([]byte(v))
+		vH := helper.Sum64()
+		hashCode = hashCode ^ vH
 	}
 
-	sort.Strings(tagNames)
-	sort.Strings(tagValues)
-
-	for _, tn := range tagNames {
-		buffer.WriteString(tn)
-	}
-
-	for _, tv := range tagValues {
-		buffer.WriteString(tv)
-	}
-
-	buffer.WriteTo(h)
-	return h.Sum64()
+	return hashCode
 }
 
 // Checks that stored definition is up to date with the model
@@ -222,7 +207,7 @@ func (h *hawkularSink) createDefinitionFromModel(ms *core.MetricSet, metric core
 	if md, f := h.models[metric.Name]; f {
 		// Copy the original map
 		mdd := *md
-		tags := make(map[string]string)
+		tags := make(map[string]string, len(mdd.Tags)+len(ms.Labels)+len(metric.Labels)+2+8) // 8 is just arbitrary extra for potential splits
 		for k, v := range mdd.Tags {
 			tags[k] = v
 		}

@@ -203,13 +203,33 @@ func (h *hawkularSink) nodeName(ms *core.MetricSet) string {
 	return ms.Labels[core.LabelNodename.Key]
 }
 
-func (h *hawkularSink) createDefinitionFromModel(ms *core.MetricSet, metric core.LabeledMetric) (*metrics.MetricDefinition, error) {
+func (h *hawkularSink) createDefinitionFromModel(ms *core.MetricSet, metric core.LabeledMetric) (*metrics.MetricDefinition, uint64) {
 	if md, f := h.models[metric.Name]; f {
+		hasher := fnv.New64a()
+
+		hasher.Write([]byte(md.Type))
+		hasher.Write([]byte(md.ID))
+
+		helper := fnv.New64a()
+
+		var hashCode uint64
+
+		helperFunc := func(k string, v string, hashCode uint64) uint64 {
+			helper.Reset()
+			helper.Write([]byte(k))
+			helper.Write([]byte(v))
+			vH := helper.Sum64()
+			hashCode = hashCode ^ vH
+
+			return hashCode
+		}
+
 		// Copy the original map
 		mdd := *md
 		tags := make(map[string]string, len(mdd.Tags)+len(ms.Labels)+len(metric.Labels)+2+8) // 8 is just arbitrary extra for potential splits
 		for k, v := range mdd.Tags {
 			tags[k] = v
+			hashCode = helperFunc(k, v, hashCode)
 		}
 		mdd.Tags = tags
 
@@ -223,7 +243,9 @@ func (h *hawkularSink) createDefinitionFromModel(ms *core.MetricSet, metric core
 					if len(labelKeyValue) != 2 {
 						glog.V(4).Infof("Could not split the label %v into its key and value pair. This label will not be added as a tag in Hawkular Metrics.", label)
 					} else {
-						mdd.Tags[h.labelTagPrefix+labelKeyValue[0]] = labelKeyValue[1]
+						labelKey := h.labelTagPrefix + labelKeyValue[0]
+						mdd.Tags[labelKey] = labelKeyValue[1]
+						hashCode = helperFunc(labelKey, labelKeyValue[1], hashCode)
 					}
 				}
 			}
@@ -232,14 +254,20 @@ func (h *hawkularSink) createDefinitionFromModel(ms *core.MetricSet, metric core
 		// Set the labeled values
 		for k, v := range metric.Labels {
 			mdd.Tags[k] = v
+			hashCode = helperFunc(k, v, hashCode)
 		}
 
-		mdd.Tags[groupTag] = h.groupName(ms, metric.Name)
+		groupName := h.groupName(ms, metric.Name)
+		mdd.Tags[groupTag] = groupName
 		mdd.Tags[descriptorTag] = metric.Name
 
-		return &mdd, nil
+		hashCode = helperFunc(groupTag, groupName, hashCode)
+		hashCode = helperFunc(descriptorTag, metric.Name, hashCode)
+
+		return &mdd, hashCode
 	}
-	return nil, fmt.Errorf("Could not find definition model with name %s", metric.Name)
+	return nil, 0
+	// return nil, fmt.Errorf("Could not find definition model with name %s", metric.Name)
 }
 
 func (h *hawkularSink) registerLabeledIfNecessary(ms *core.MetricSet, metric core.LabeledMetric, m ...metrics.Modifier) (uint64, error) {
@@ -252,33 +280,29 @@ func (h *hawkularSink) registerLabeledIfNecessary(ms *core.MetricSet, metric cor
 		key = h.idName(ms, metric.Name)
 	}
 
-	mdd, err := h.createDefinitionFromModel(ms, metric)
-	if err != nil {
-		return 0, err
-	}
+	mdd, mddHash := h.createDefinitionFromModel(ms, metric)
+	if mddHash != 0 {
+		h.regLock.RLock()
+		if _, found := h.reg[key]; !found || h.reg[key] != mddHash {
+			// I'm going to release the lock to allow concurrent processing, even if that
+			// can cause dual updates (highly unlikely). The UpdateTags is idempotent in any case.
+			h.regLock.RUnlock()
+			m = append(m, h.modifiers...)
 
-	mddHash := hash(mdd)
+			// Create metric, use updateTags instead of Create because we don't care about uniqueness
+			if err := h.client.UpdateTags(heapsterTypeToHawkularType(metric.MetricType), key, mdd.Tags, m...); err != nil {
+				// Log error and don't add this key to the lookup table
+				glog.Errorf("Could not update tags: %s", err)
+				return 0, err
+			}
 
-	h.regLock.RLock()
-	if _, found := h.reg[key]; !found || h.reg[key] != mddHash {
-		// I'm going to release the lock to allow concurrent processing, even if that
-		// can cause dual updates (highly unlikely). The UpdateTags is idempotent in any case.
-		h.regLock.RUnlock()
-		m = append(m, h.modifiers...)
-
-		// Create metric, use updateTags instead of Create because we don't care about uniqueness
-		if err := h.client.UpdateTags(heapsterTypeToHawkularType(metric.MetricType), key, mdd.Tags, m...); err != nil {
-			// Log error and don't add this key to the lookup table
-			glog.Errorf("Could not update tags: %s", err)
-			return 0, err
+			h.regLock.Lock()
+			h.reg[key] = mddHash
+			h.regLock.Unlock()
+			count++
+		} else {
+			h.regLock.RUnlock()
 		}
-
-		h.regLock.Lock()
-		h.reg[key] = mddHash
-		h.regLock.Unlock()
-		count++
-	} else {
-		h.regLock.RUnlock()
 	}
 
 	return count, nil

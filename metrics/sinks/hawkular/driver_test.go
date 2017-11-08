@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -313,7 +314,7 @@ func TestRegister(t *testing.T) {
 				w.WriteHeader(http.StatusNoContent)
 				return
 			}
-			if strings.Contains(r.RequestURI, "metrics?tags=descriptor_name%3A%2A") {
+			if strings.Contains(r.RequestURI, "metrics?tags=descriptor_name%3A%2A") || strings.Contains(r.RequestURI, "openshift") {
 				requests++
 				// typ := r.RequestURI[strings.Index(r.RequestURI, "type=")+5:]
 				// definitionsCalled[typ] = true
@@ -380,7 +381,7 @@ func TestRegister(t *testing.T) {
 	// assert.True(t, definitionsCalled["gauge"], "Gauge definitions were not fetched")
 	// assert.True(t, definitionsCalled["counter"], "Counter definitions were not fetched")
 	assert.True(t, updateTagsCalled, "Updating outdated tags was not called")
-	assert.Equal(t, 2, requests)
+	assert.Equal(t, 1, requests)
 
 	// Try without pre caching
 	// definitionsCalled = make(map[string]bool)
@@ -804,4 +805,80 @@ func TestBatchingTimeseries(t *testing.T) {
 		}
 		newIds[v] = true
 	}
+}
+
+func BenchmarkTagsUpdates(b *testing.B) {
+	http.DefaultTransport.(*http.Transport).MaxIdleConnsPerHost = 100
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer s.Close()
+	hSink, err := integSink(s.URL + "?tenant=test-heapster&labelToTenant=projectId&batchSize=1000&concurrencyLimit=16")
+	// hSink, err := integSink("http://localhost:8080?tenant=test-heapster&labelToTenant=projectId&batchSize=1000&concurrencyLimit=16")
+	if err != nil {
+		b.FailNow()
+	}
+
+	smd := core.MetricDescriptor{
+		Name:      "test/metric/A",
+		Units:     core.UnitsBytes,
+		ValueType: core.ValueInt64,
+		Type:      core.MetricGauge,
+		Labels:    []core.LabelDescriptor{},
+	}
+
+	//register the metric definitions
+	hSink.Register([]core.MetricDescriptor{smd})
+	total := 10000
+
+	mset := make(map[string]*core.MetricSet)
+	for i := 0; i < total; i++ {
+		id := fmt.Sprintf("pod-%d", i)
+
+		l := make(map[string]string)
+		l["projectId"] = strconv.Itoa(i)
+		for i := 0; i < 32; i++ {
+			tagName := fmt.Sprintf("tag_name_%d", i)
+			tagValue := fmt.Sprintf("tag_value_%d", i)
+			l[tagName] = tagValue
+			l[core.LabelPodId.Key] = id
+		}
+
+		metrics := make(map[string]core.MetricValue)
+		metrics["test/metric/A"] = core.MetricValue{
+			ValueType:  core.ValueInt64,
+			MetricType: core.MetricCumulative,
+			IntValue:   123,
+		}
+
+		metricSet := core.MetricSet{
+			Labels:       l,
+			MetricValues: metrics,
+		}
+		mset[id] = &metricSet
+	}
+
+	data := core.DataBatch{
+		Timestamp:  time.Now(),
+		MetricSets: mset,
+		// MetricSets: map[string]*core.MetricSet{
+		//      "pod1": &metricSet,
+		// },
+	}
+
+	fmt.Printf("%d\n", len(data.MetricSets))
+
+	fmt.Printf("Generated data\n")
+	hSink.init()
+	hSink.Register([]core.MetricDescriptor{smd})
+	b.ResetTimer()
+	for j := 0; j < b.N; j++ {
+		for a := 0; a < 10; a++ {
+			data.Timestamp = time.Now()
+			hSink.ExportData(&data)
+			fmt.Printf("ExportData() returned, %d\n", b.N)
+		}
+	}
+
+	fmt.Printf("Amount of unique definitions: %d\n", len(hSink.reg))
 }

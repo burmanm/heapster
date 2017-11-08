@@ -30,51 +30,24 @@ import (
 
 // cacheDefinitions Fetches all known definitions from all tenants (all projects in Openshift)
 func (h *hawkularSink) cacheDefinitions() error {
-	tds, err := h.client.Tenants()
-	if err != nil {
-		return err
+	if !h.disablePreCaching {
+		mds, err := h.client.AllDefinitions()
+		if err != nil {
+			return err
+		}
+		err = h.updateDefinitions(mds)
+		if err != nil {
+			return err
+		}
 	}
 
-	// TagsFiltering for definitions
-	tagsFilter := make(map[string]string, 1)
-	tagsFilter[descriptorTag] = "*"
-
-	m := make([]metrics.Modifier, len(h.modifiers), len(h.modifiers)+1)
-	copy(m, h.modifiers)
-	m = append(m, metrics.Filters(metrics.TagsFilter(tagsFilter)))
-
-	wG := &sync.WaitGroup{}
-
-	for _, td := range tds {
-		fetchModifiers := make([]metrics.Modifier, len(m), len(m)+1)
-		copy(fetchModifiers, m)
-		fetchModifiers = append(m, metrics.Tenant(td.ID))
-
-		wG.Add(1)
-		go func(m ...metrics.Modifier) {
-			err := h.updateDefinitions(fetchModifiers...)
-			if err != nil {
-				fmt.Println(err)
-			}
-			wG.Done()
-		}()
-
-		// Any missing fetches will be cached in the first datapoint store
-	}
-
-	wG.Wait()
 	glog.V(4).Infof("PreCaching completed, cached %d definitions\n", len(h.reg))
 
 	return nil
 }
 
 // Fetches definitions from the server and checks that they're matching the descriptors
-func (h *hawkularSink) updateDefinitions(m ...metrics.Modifier) error {
-	mds, err := h.client.Definitions(m...)
-	if err != nil {
-		return err
-	}
-
+func (h *hawkularSink) updateDefinitions(mds []*metrics.MetricDefinition) error {
 	for _, p := range mds {
 		if model, f := h.models[p.Tags[descriptorTag]]; f && !h.recent(p, model) {
 			if err := h.client.UpdateTags(p.Type, p.ID, p.Tags, h.modifiers...); err != nil {

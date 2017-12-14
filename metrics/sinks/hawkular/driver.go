@@ -23,7 +23,6 @@ import (
 	"net/url"
 	"strconv"
 	"sync"
-	"sync/atomic"
 
 	"github.com/golang/glog"
 	"github.com/hawkular/hawkular-client-go/metrics"
@@ -78,6 +77,7 @@ func (h *hawkularSink) Stop() {
 
 func (h *hawkularSink) ExportData(db *core.DataBatch) {
 	totalCount := 0
+	h.runId++
 	for _, ms := range db.MetricSets {
 		totalCount += len(ms.MetricValues)
 		totalCount += len(ms.LabeledMetrics)
@@ -91,7 +91,6 @@ func (h *hawkularSink) ExportData(db *core.DataBatch) {
 		}
 
 		wg := &sync.WaitGroup{}
-		updatedTags := uint64(0)
 
 		for _, ms := range db.MetricSets {
 
@@ -119,13 +118,7 @@ func (h *hawkularSink) ExportData(db *core.DataBatch) {
 					}
 				}
 
-				wg.Add(1)
-				go func(ms *core.MetricSet, labeledMetric core.LabeledMetric, tenant string) {
-					defer wg.Done()
-					c, _ := h.registerLabeledIfNecessary(ms, labeledMetric, metrics.Tenant(tenant))
-					atomic.AddUint64(&updatedTags, c)
-				}(ms, labeledMetric, tenant)
-
+				h.registerLabeledIfNecessaryInline(ms, labeledMetric, wg, metrics.Tenant(tenant))
 				mH, err := h.pointToLabeledMetricHeader(ms, labeledMetric, db.Timestamp)
 				if err != nil {
 					// One transformation error should not prevent the whole process
@@ -142,8 +135,9 @@ func (h *hawkularSink) ExportData(db *core.DataBatch) {
 		}
 		h.sendData(tmhs, wg) // Send to a limited channel? Only batches.. egg.
 		wg.Wait()
-		glog.V(4).Infof("ExportData updated %d tags, total size of cached tags is %d\n", updatedTags, len(h.reg))
+		// glog.V(4).Infof("ExportData updated %d tags, total size of cached tags is %d\n", updatedTags, len(h.reg))
 	}
+	go h.expireCache()
 }
 
 func metricValueToLabeledMetric(msValues map[string]core.MetricValue) []core.LabeledMetric {
@@ -164,7 +158,7 @@ func (h *hawkularSink) DebugInfo() string {
 
 	h.regLock.Lock()
 	defer h.regLock.Unlock()
-	info += fmt.Sprintf("Known metrics: %d\n", len(h.reg))
+	info += fmt.Sprintf("Cached metrics: %d\n", len(h.expReg))
 	if len(h.labelTenant) > 0 {
 		info += fmt.Sprintf("Using label '%s' as tenant information\n", h.labelTenant)
 	}
@@ -199,11 +193,14 @@ func NewHawkularSink(u *url.URL) (core.DataSink, error) {
 }
 
 func (h *hawkularSink) init() error {
-	h.reg = make(map[string]uint64)
+	// h.reg = make(map[string]uint64)
 	h.models = make(map[string]*metrics.MetricDefinition)
 	h.modifiers = make([]metrics.Modifier, 0)
 	h.filters = make([]Filter, 0)
 	h.batchSize = batchSizeDefault
+	h.expReg = make(map[string]*expiringItem)
+	h.cacheAge = 2
+	h.runId = 0
 
 	p := metrics.Parameters{
 		Tenant:      "heapster",

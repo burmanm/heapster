@@ -31,7 +31,7 @@ import (
 // cacheDefinitions Fetches all known definitions from all tenants (all projects in Openshift)
 func (h *hawkularSink) cacheDefinitions() error {
 	if !h.disablePreCaching {
-		mds, err := h.client.AllDefinitions()
+		mds, err := h.client.AllDefinitions(h.modifiers...)
 		if err != nil {
 			return err
 		}
@@ -41,9 +41,51 @@ func (h *hawkularSink) cacheDefinitions() error {
 		}
 	}
 
-	glog.V(4).Infof("PreCaching completed, cached %d definitions\n", len(h.reg))
+	glog.V(4).Infof("PreCaching completed, cached %d definitions\n", len(h.expReg))
 
 	return nil
+}
+
+// cache inserts the item to the cache
+func (h *hawkularSink) cache(md *metrics.MetricDefinition) {
+	h.toCache(md.ID, hash(md))
+}
+
+// toCache inserts the item and updates the TTL in the cache to current time
+func (h *hawkularSink) toCache(key string, hash uint64) {
+	h.regLock.Lock()
+	h.expReg[key] = &expiringItem{
+		hash: hash,
+		ttl:  h.runId,
+	}
+	h.regLock.Unlock()
+}
+
+// checkCache returns false if the cached instance is not current. Updates the TTL in the cache
+func (h *hawkularSink) checkCache(key string, hash uint64) bool {
+	h.regLock.Lock()
+	defer h.regLock.Unlock()
+	_, found := h.expReg[key]
+	if !found || h.expReg[key].hash != hash {
+		return false
+	}
+	// Update the TTL
+	h.expReg[key].ttl = h.runId
+	return true
+}
+
+// expireCache will process the map and check for any item that has been expired and release it
+func (h *hawkularSink) expireCache() {
+	h.regLock.Lock()
+	defer h.regLock.Unlock()
+
+	expireAge := h.runId - h.cacheAge
+
+	for k, v := range h.expReg {
+		if v.ttl <= expireAge {
+			delete(h.expReg, k)
+		}
+	}
 }
 
 // Fetches definitions from the server and checks that they're matching the descriptors
@@ -54,9 +96,7 @@ func (h *hawkularSink) updateDefinitions(mds []*metrics.MetricDefinition) error 
 				return err
 			}
 		}
-		h.regLock.Lock()
-		h.reg[p.ID] = hash(p)
-		h.regLock.Unlock()
+		h.cache(p)
 	}
 
 	return nil
@@ -243,9 +283,7 @@ func (h *hawkularSink) createDefinitionFromModel(ms *core.MetricSet, metric core
 	// return nil, fmt.Errorf("Could not find definition model with name %s", metric.Name)
 }
 
-func (h *hawkularSink) registerLabeledIfNecessary(ms *core.MetricSet, metric core.LabeledMetric, m ...metrics.Modifier) (uint64, error) {
-
-	count := uint64(0)
+func (h *hawkularSink) registerLabeledIfNecessaryInline(ms *core.MetricSet, metric core.LabeledMetric, wg *sync.WaitGroup, m ...metrics.Modifier) error {
 	var key string
 	if resourceID, found := metric.Labels[core.LabelResourceID.Key]; found {
 		key = h.idName(ms, metric.Name+separator+resourceID)
@@ -254,31 +292,23 @@ func (h *hawkularSink) registerLabeledIfNecessary(ms *core.MetricSet, metric cor
 	}
 
 	mdd, mddHash := h.createDefinitionFromModel(ms, metric)
-	if mddHash != 0 {
-		h.regLock.RLock()
-		if _, found := h.reg[key]; !found || h.reg[key] != mddHash {
-			// I'm going to release the lock to allow concurrent processing, even if that
-			// can cause dual updates (highly unlikely). The UpdateTags is idempotent in any case.
-			h.regLock.RUnlock()
-			m = append(m, h.modifiers...)
+	if mddHash != 0 && !h.checkCache(key, mddHash) {
 
+		wg.Add(1)
+		go func(ms *core.MetricSet, labeledMetric core.LabeledMetric, m ...metrics.Modifier) {
+			defer wg.Done()
+			m = append(m, h.modifiers...)
 			// Create metric, use updateTags instead of Create because we don't care about uniqueness
 			if err := h.client.UpdateTags(heapsterTypeToHawkularType(metric.MetricType), key, mdd.Tags, m...); err != nil {
 				// Log error and don't add this key to the lookup table
 				glog.Errorf("Could not update tags: %s", err)
-				return 0, err
+				return
+				// return err
 			}
-
-			h.regLock.Lock()
-			h.reg[key] = mddHash
-			h.regLock.Unlock()
-			count++
-		} else {
-			h.regLock.RUnlock()
-		}
+			h.toCache(key, mddHash)
+		}(ms, metric, m...)
 	}
-
-	return count, nil
+	return nil
 }
 
 func toBatches(m []metrics.MetricHeader, batchSize int) chan []metrics.MetricHeader {

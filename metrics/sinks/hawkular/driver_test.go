@@ -316,17 +316,9 @@ func TestRegister(t *testing.T) {
 			}
 			if strings.Contains(r.RequestURI, "metrics?tags=descriptor_name%3A%2A") || strings.Contains(r.RequestURI, "openshift") {
 				requests++
-				// typ := r.RequestURI[strings.Index(r.RequestURI, "type=")+5:]
-				// definitionsCalled[typ] = true
-				// if typ == "gauge" {
 				fmt.Fprintln(w, `[{ "id": "test.create.gauge.1", "tenantId": "test-heapster", "type": "gauge", "tags": { "descriptor_name": "test/metric/1" } }]`)
-				// } else {
-				// 	fmt.Printf("Empty\n")
-				// 	w.WriteHeader(http.StatusNoContent)
-				// }
 			} else if strings.Contains(r.RequestURI, "/tags") && r.Method == "PUT" {
 				updateTagsCalled = true
-				// assert.True(t, strings.Contains(r.RequestURI, "k1:d1"), "Tag k1 was not updated with value d1")
 				defer r.Body.Close()
 				b, err := ioutil.ReadAll(r.Body)
 				assert.NoError(t, err)
@@ -378,13 +370,10 @@ func TestRegister(t *testing.T) {
 	assert.Equal(t, 2, len(hSink.models))
 	assert.Equal(t, 1, len(hSink.expReg))
 
-	// assert.True(t, definitionsCalled["gauge"], "Gauge definitions were not fetched")
-	// assert.True(t, definitionsCalled["counter"], "Counter definitions were not fetched")
 	assert.True(t, updateTagsCalled, "Updating outdated tags was not called")
 	assert.Equal(t, 1, requests)
 
 	// Try without pre caching
-	// definitionsCalled = make(map[string]bool)
 	updateTagsCalled = false
 
 	hSink, err = integSink(s.URL + "?tenant=test-heapster&disablePreCache=true")
@@ -396,8 +385,6 @@ func TestRegister(t *testing.T) {
 	assert.Equal(t, 2, len(hSink.models))
 	assert.Equal(t, 0, len(hSink.expReg))
 
-	// assert.False(t, definitionsCalled["gauge"], "Gauge definitions were fetched")
-	// assert.False(t, definitionsCalled["counter"], "Counter definitions were fetched")
 	assert.False(t, updateTagsCalled, "Updating outdated tags was called")
 }
 
@@ -889,7 +876,6 @@ func BenchmarkTagsUpdates(b *testing.B) {
 	}))
 	defer s.Close()
 	hSink, err := integSink(s.URL + "?tenant=test-heapster&labelToTenant=projectId&batchSize=1000&concurrencyLimit=16")
-	// hSink, err := integSink("http://localhost:8080?tenant=test-heapster&labelToTenant=projectId&batchSize=1000&concurrencyLimit=16")
 	if err != nil {
 		b.FailNow()
 	}
@@ -936,14 +922,9 @@ func BenchmarkTagsUpdates(b *testing.B) {
 	data := core.DataBatch{
 		Timestamp:  time.Now(),
 		MetricSets: mset,
-		// MetricSets: map[string]*core.MetricSet{
-		//      "pod1": &metricSet,
-		// },
 	}
 
-	fmt.Printf("%d\n", len(data.MetricSets))
-
-	fmt.Printf("Generated data\n")
+	fmt.Printf("Generated data with %d metricSets\n", len(data.MetricSets))
 	hSink.init()
 	hSink.Register([]core.MetricDescriptor{smd})
 	b.ResetTimer()
@@ -951,7 +932,6 @@ func BenchmarkTagsUpdates(b *testing.B) {
 		for a := 0; a < 10; a++ {
 			data.Timestamp = time.Now()
 			hSink.ExportData(&data)
-			fmt.Printf("ExportData() returned, %d\n", b.N)
 		}
 	}
 

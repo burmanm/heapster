@@ -41,18 +41,18 @@ func (h *hawkularSink) cacheDefinitions() error {
 		}
 	}
 
-	glog.V(4).Infof("PreCaching completed, cached %d definitions\n", len(h.expReg))
+	glog.V(4).Infof("Hawkular definition pre-caching completed, cached %d definitions\n", len(h.expReg))
 
 	return nil
 }
 
 // cache inserts the item to the cache
 func (h *hawkularSink) cache(md *metrics.MetricDefinition) {
-	h.toCache(md.ID, hash(md))
+	h.pushToCache(md.ID, hashDefinition(md))
 }
 
 // toCache inserts the item and updates the TTL in the cache to current time
-func (h *hawkularSink) toCache(key string, hash uint64) {
+func (h *hawkularSink) pushToCache(key string, hash uint64) {
 	h.regLock.Lock()
 	h.expReg[key] = &expiringItem{
 		hash: hash,
@@ -100,7 +100,7 @@ func (h *hawkularSink) updateDefinitions(mds []*metrics.MetricDefinition) error 
 	return nil
 }
 
-func hash(md *metrics.MetricDefinition) uint64 {
+func hashDefinition(md *metrics.MetricDefinition) uint64 {
 	h := fnv.New64a()
 
 	h.Write([]byte(md.Type))
@@ -303,7 +303,7 @@ func (h *hawkularSink) registerLabeledIfNecessaryInline(ms *core.MetricSet, metr
 				return
 				// return err
 			}
-			h.toCache(key, mddHash)
+			h.pushToCache(key, mddHash)
 		}(ms, metric, m...)
 	}
 	return nil
